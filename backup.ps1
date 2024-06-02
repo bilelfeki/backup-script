@@ -1,66 +1,89 @@
-$originalRepo="https://github.com/bilelfeki/task-scheduler-interface"
-$backupRepo="https://github.com/bilelfeki/task-scheduler-interface-backup"
+$originalRepoURL = "https://github.com/bilelfeki/task-scheduler-interface"
+$backupRepoUrl = "https://github.com/bilelfeki/task-scheduler-interface-backup"
 
-try {
+$numberOfBrokenCommitLimit = 3
+function getRepoNameFromUrl {
+   param([Parameter(Mandatory = $True)][string] $url)
+   return $url.Split('/')[-1]
+}
+function isRepoCloned {
+   param ([Parameter(Mandatory = $True)] [string] $repoName)
    $search = Get-ChildItem -Path .\
-   $isRealRepoCloned = $false
-   $isBackUpRepoCloned = $false
+   foreach ($result in $search) {
+      if ($result.Name -eq ($repoName)) {
+         return $true
+      }
+   }
+   return $false
+}
+function extractCommitsFromLogsInHashMap {
+   param([Parameter(Mandatory = $True)][string[]] $logs)
+   $commitMap = @{}
+   foreach ($log in $logs) {
+      $commitMap[$log.split(' ')[0]] = '1'
+   }
+   return $commitMap
+}
+function goToClonedRepo {
+   param($repoPath)
+   Set-Location $repoPath
    
-   $realRepoName=$originalRepo.Split('/')[-1]
-   $backupRepoName=$backupRepo.Split('/')[-1]
-   $localBackupRepoPath = '.\' + $backupRepoName
-   $localRealRepoPath= '.\' + $realRepoName 
+}
+function goBack {
+   Set-Location ..
+}
 
-   $realCommitMap=@{}
-   $backUpCommitMap=@{}
-   foreach ($result in $search){
-      if ($result.Name -eq ($realRepoName)) {
-         $isRealRepoCloned = $true
-      }
-      if ($result.Name -eq ($backupRepoName)) {
-         $isBackUpRepoCloned = $true         
-      }
-   }
-   if ($isRealRepoCloned -eq $true -AND $isBackUpRepoCloned -eq $true) {
-      echo 'updating repository'
+function getNewCommitsFromLocalRepo {
+   git pull > $null 2>&1
+   $logs = git log --oneline
+   return extractCommitsFromLogsInHashMap -logs $logs
 
-      cd $localRealRepoPath
- 
-      $pull= git pull
-      echo $pull
-      $logs = git log --oneline
-      #search for the updated commit 
-      #put it in hashmap
-      foreach($log in $logs){
-         $realCommitMap[$log.split(' ')[0]] = '1'
-         echo $log.split(' ')[0] 
-      }
+}
 
-      cd ..
-      cd $localBackupRepoPath
-      $pull= git pull
-      echo $pull
-      $logs = git log --oneline
-      #search for the updated commit 
-      #put it in hashmap
-      foreach($log in $logs){
-         $backUpCommitMap[$log.split(' ')[0]] = '1'
-         echo $log.split(' ')[0] 
-      }
-
-      #get new commits
-
-      echo $realCommitMap
-      echo $backUpCommitMap
-
-   } else {
-      if($isRealRepoCloned -eq $false){
-         git clone $originalRepo
-      }
-      if($isBackUpRepoCloned -eq $false){
-         git clone $backupRepo
+function willBackUpBranchUpdated {
+   param (
+      [hashtable] $originalRepoCommits, [hashtable] $backupRepoCommit
+   )
+   foreach ($Key in $backupRepoCommit.Keys) {
+      $notFoundCommitNumber = 0
+      if (!$originalRepoCommits[$key]) {
+         $notFoundCommitNumber = $notFoundCommitNumber + 1
       }
    }
-} catch {
-   Write-Error "An error occurred: $_"
+   return $($notFoundCommitNumber -le $numberOfBrokenCommitLimit)
+}
+$realCommitMap = @{}
+$backUpCommitMap = @{}
+$realRepoName = getRepoNameFromUrl -url $originalRepoURL
+$backupRepoName = getRepoNameFromUrl -url $backupRepoUrl
+$localBackupRepoPath = '.\' + $backupRepoName
+$localRealRepoPath = '.\' + $realRepoName 
+$isRealRepoCloned = isRepoCloned -repoName $realRepoName
+$isBackUpRepoCloned = isRepoCloned -repoName $backupRepoName
+
+if ($isRealRepoCloned -eq $false) {
+   git clone $originalRepoURL
+}
+if ($isBackUpRepoCloned -eq $false) {
+   git clone $backupRepoUrl
+}
+
+goToClonedRepo -repoPath $localRealRepoPath
+$realCommitMap = getNewCommitsFromLocalRepo
+git push $backupRepoUrl 
+goBack 
+
+goToClonedRepo -repoPath $localBackupRepoPath
+$backUpCommitMap = getNewCommitsFromLocalRepo
+goBack 
+
+$couldUpdateBackupRepo = willBackUpBranchUpdated -originalRepoCommits $realCommitMap -backupRepoCommit $backUpCommitMap
+
+if ($couldUpdateBackupRepo) {
+   Write-Output '**************updating backup repo****************'
+   goToClonedRepo -repoPath $localRealRepoPath
+   git push $backupRepoUrl 
+   goBack 
+}else {
+   Write-Output '**************send notif to the owner****************'
 }
