@@ -1,7 +1,7 @@
 $originalRepoURL = "https://github.com/bilelfeki/task-scheduler-interface"
 $backupRepoUrl = "https://github.com/bilelfeki/task-scheduler-interface-backup"
 
-$numberOfBrokenCommitLimit = 3
+$numberOfBrokenCommitLimit = 2
 function getRepoNameFromUrl {
    param([Parameter(Mandatory = $True)][string] $url)
    return $url.Split('/')[-1]
@@ -44,14 +44,43 @@ function willBackUpBranchUpdated {
    param (
       [hashtable] $originalRepoCommits, [hashtable] $backupRepoCommit
    )
+   $notFoundCommitNumber = 0
    foreach ($Key in $backupRepoCommit.Keys) {
-      $notFoundCommitNumber = 0
       if (!$originalRepoCommits[$key]) {
          $notFoundCommitNumber = $notFoundCommitNumber + 1
       }
    }
    return $($notFoundCommitNumber -le $numberOfBrokenCommitLimit)
 }
+function Show-Notification {
+   [cmdletbinding()]
+   Param (
+       [string]
+       $ToastTitle,
+       [string]
+       [parameter(ValueFromPipeline)]
+       $ToastText
+   )
+
+   [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] > $null
+   $Template = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent([Windows.UI.Notifications.ToastTemplateType]::ToastText02)
+
+   $RawXml = [xml] $Template.GetXml()
+   ($RawXml.toast.visual.binding.text|where {$_.id -eq "1"}).AppendChild($RawXml.CreateTextNode($ToastTitle)) > $null
+   ($RawXml.toast.visual.binding.text|where {$_.id -eq "2"}).AppendChild($RawXml.CreateTextNode($ToastText)) > $null
+   
+   $SerializedXml = New-Object Windows.Data.Xml.Dom.XmlDocument
+   $SerializedXml.LoadXml($RawXml.OuterXml)
+
+   $Toast = [Windows.UI.Notifications.ToastNotification]::new($SerializedXml)
+   $Toast.Tag = "PowerShell"
+   $Toast.Group = "PowerShell"
+   $Toast.ExpirationTime = [DateTimeOffset]::Now.AddDays(3)
+
+   $Notifier = [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier("Backup Repo")
+   $Notifier.Show($Toast);
+}
+
 $realCommitMap = @{}
 $backUpCommitMap = @{}
 $realRepoName = getRepoNameFromUrl -url $originalRepoURL
@@ -70,7 +99,6 @@ if ($isBackUpRepoCloned -eq $false) {
 
 goToClonedRepo -repoPath $localRealRepoPath
 $realCommitMap = getNewCommitsFromLocalRepo
-git push $backupRepoUrl 
 goBack 
 
 goToClonedRepo -repoPath $localBackupRepoPath
@@ -85,5 +113,6 @@ if ($couldUpdateBackupRepo) {
    git push $backupRepoUrl 
    goBack 
 }else {
+   Show-Notification -ToastTitle 'Your Branch Has Some Problems Please Check It'
    Write-Output '**************send notif to the owner****************'
 }
